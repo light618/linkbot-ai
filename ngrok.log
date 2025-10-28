@@ -1,0 +1,12 @@
+t=2025-10-27T09:49:31+0800 lvl=info msg="no configuration paths supplied"
+t=2025-10-27T09:49:31+0800 lvl=info msg="ignoring default config path, could not stat it" path="/Users/yiche/Library/Application Support/ngrok/ngrok.yml"
+t=2025-10-27T09:49:31+0800 lvl=info msg="starting web service" obj=web addr=127.0.0.1:4040 allow_hosts=[]
+t=2025-10-27T09:49:31+0800 lvl=eror msg="failed to reconnect session" obj=tunnels.session err="failed to send authentication request: read tcp 10.168.239.9:58813->57.180.103.55:443: read: connection reset by peer"
+t=2025-10-27T09:49:32+0800 lvl=eror msg="failed to reconnect session" obj=tunnels.session err="failed to send authentication request: read tcp 10.168.239.9:58820->57.180.103.55:443: read: connection reset by peer"
+t=2025-10-27T09:49:33+0800 lvl=eror msg="failed to reconnect session" obj=tunnels.session err="failed to send authentication request: read tcp 10.168.239.9:58823->57.180.103.55:443: read: connection reset by peer"
+t=2025-10-27T09:49:35+0800 lvl=eror msg="failed to reconnect session" obj=tunnels.session err="failed to send authentication request: read tcp 10.168.239.9:58830->57.180.103.55:443: read: connection reset by peer"
+t=2025-10-27T09:49:37+0800 lvl=info msg=start pg=/api/tunnels id=ba99a4fe1a010ca9
+t=2025-10-27T09:49:37+0800 lvl=info msg=end pg=/api/tunnels id=ba99a4fe1a010ca9 status=200 dur=177.709µs
+t=2025-10-27T09:49:44+0800 lvl=eror msg="failed to reconnect session" obj=tunnels.session err="failed to send authentication request: read tcp 10.168.239.9:58835->57.180.103.55:443: read: connection reset by peer"
+t=2025-10-27T09:49:45+0800 lvl=info msg="received stop request" obj=app stopReq="{err:<nil> restart:false}"
+t=2025-10-27T09:49:45+0800 lvl=info msg="session closing" obj=tunnels.session err=nil

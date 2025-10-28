@@ -1,0 +1,152 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:15-alpine
+    container_name: linkbot-postgres
+    environment:
+      POSTGRES_DB: linkbot_ai
+      POSTGRES_USER: linkbot
+      POSTGRES_PASSWORD: linkbot123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./deploy/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - linkbot-network
+
+  # Redis 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: linkbot-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - linkbot-network
+
+  # NocoBase CRM
+  nocobase:
+    image: nocobase/nocobase:main
+    container_name: linkbot-nocobase
+    environment:
+      DB_DIALECT: postgres
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: linkbot_ai
+      DB_USER: linkbot
+      DB_PASSWORD: linkbot123
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      APP_ENV: production
+      APP_KEY: linkbot-ai-secret-key-2024
+    ports:
+      - "13000:3000"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - linkbot-network
+
+  # 后端 API 服务
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: linkbot-backend
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: linkbot_ai
+      DB_USER: linkbot
+      DB_PASSWORD: linkbot123
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: linkbot-jwt-secret-2024
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - linkbot-network
+
+  # 前端管理后台
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: linkbot-frontend
+    environment:
+      REACT_APP_API_URL: http://localhost:3001/api
+      REACT_APP_WS_URL: ws://localhost:8080
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - linkbot-network
+
+  # Go 代理服务
+  proxy:
+    build:
+      context: ./proxy
+      dockerfile: Dockerfile
+    container_name: linkbot-proxy
+    environment:
+      PORT: 8080
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      API_URL: http://backend:3001/api
+      DOUYIN_APP_ID: aw6hj204nms0vumu
+      DOUYIN_APP_SECRET: b46cd587e094aae751e45380f9c0e72d
+      REDIRECT_URI: http://localhost:8080/oauth/callback
+      COZE_API: https://api.coze.com/open/v1
+      COZE_TOKEN: 
+      NB_API: 
+      NB_TOKEN: 
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./proxy:/app
+    depends_on:
+      - redis
+      - backend
+    networks:
+      - linkbot-network
+
+  # Nginx 反向代理
+  nginx:
+    image: nginx:alpine
+    container_name: linkbot-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf
+      - ./deploy/ssl:/etc/nginx/ssl
+    depends_on:
+      - frontend
+      - backend
+      - proxy
+    networks:
+      - linkbot-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  linkbot-network:
+    driver: bridge
