@@ -271,7 +271,7 @@ const DouyinPage: React.FC = () => {
   const handleDouyinAuth = async () => {
     try {
       // 直接跳转到Go代理的授权URL（从环境变量读取外网域名）
-      const proxyBase = (process.env.REACT_APP_PROXY_PUBLIC_BASE || '').trim() || 'http://localhost:8080';
+      const proxyBase = (process.env.REACT_APP_PROXY_PUBLIC_BASE || '').trim() || 'https://linkbot-ai-production.up.railway.app';
       const authUrl = `${proxyBase}/oauth/douyin`;
       window.open(authUrl, '_blank', 'width=500,height=600');
     } catch (error) {
@@ -281,7 +281,7 @@ const DouyinPage: React.FC = () => {
 
   // 显示二维码授权
   const showQRCodeAuth = () => {
-    const proxyBase = (process.env.REACT_APP_PROXY_PUBLIC_BASE || '').trim() || 'http://localhost:8080';
+    const proxyBase = (process.env.REACT_APP_PROXY_PUBLIC_BASE || '').trim() || 'https://linkbot-ai-production.up.railway.app';
     setAuthUrl(`${proxyBase}/oauth/douyin`);
     setQrModalVisible(true);
     
