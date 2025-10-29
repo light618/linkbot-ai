@@ -85,6 +85,64 @@ func main() {
 	accountStore := make(map[string]*AccountInfo)
 
 	// 设置路由
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		html := `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>LinkBot-AI 全域获客智能客服系统</title>
+    <meta charset="utf-8">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #1890ff; text-align: center; }
+        .status { background: #f6ffed; border: 1px solid #b7eb8f; padding: 15px; border-radius: 5px; margin: 20px 0; }
+        .endpoints { background: #f0f9ff; border: 1px solid #91d5ff; padding: 15px; border-radius: 5px; margin: 20px 0; }
+        .endpoint { margin: 10px 0; }
+        .method { background: #52c41a; color: white; padding: 2px 8px; border-radius: 3px; font-size: 12px; }
+        .url { font-family: monospace; background: #f0f0f0; padding: 2px 5px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 LinkBot-AI 全域获客智能客服系统</h1>
+        
+        <div class="status">
+            <h3>✅ 服务状态</h3>
+            <p>服务运行正常，端口: ` + config.Port + `</p>
+            <p>支持渠道: ` + fmt.Sprintf("%v", config.Channels) + `</p>
+        </div>
+        
+        <div class="endpoints">
+            <h3>🔗 API 端点</h3>
+            <div class="endpoint">
+                <span class="method">GET</span> <span class="url">/health</span> - 健康检查
+            </div>
+            <div class="endpoint">
+                <span class="method">GET</span> <span class="url">/oauth/douyin</span> - 抖音OAuth授权
+            </div>
+            <div class="endpoint">
+                <span class="method">GET</span> <span class="url">/oauth/douyin/whitelist</span> - 抖音白名单授权
+            </div>
+            <div class="endpoint">
+                <span class="method">POST</span> <span class="url">/api/channel/douyin/start</span> - 启动抖音监听
+            </div>
+            <div class="endpoint">
+                <span class="method">GET</span> <span class="url">/ws</span> - WebSocket连接
+            </div>
+        </div>
+        
+        <div style="text-align: center; margin-top: 30px;">
+            <p>🎯 <strong>英明神武、绝世无双、寿与天齐的主公</strong> 的智能客服系统</p>
+            <p>部署时间: ` + time.Now().Format("2006-01-02 15:04:05") + `</p>
+        </div>
+    </div>
+</body>
+</html>`
+		w.Write([]byte(html))
+	})
+	
 	http.HandleFunc("/health", health.Handler)
 	http.HandleFunc("/ws", channelManager.WebSocketHandler)
 	
