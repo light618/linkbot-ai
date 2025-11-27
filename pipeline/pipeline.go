@@ -6,11 +6,19 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"live-im-proxy/event"
 	"live-im-proxy/limiter"
 )
+
+// ReplySender 回复发送器接口
+type ReplySender interface {
+	SendVideoCommentReply(videoID, commentID, content string) error
+	SendLiveCommentReply(roomID, commentID, content string) error
+	SendPrivateMessage(conversationID, userID, content string) error
+}
 
 // Pipeline 数据处理管道
 type Pipeline struct {
@@ -20,6 +28,7 @@ type Pipeline struct {
 	nbToken     string
 	limiter     limiter.RateLimiter
 	httpClient  *http.Client
+	replySender ReplySender // 回复发送器（可选）
 }
 
 // NewPipeline 创建新的管道
@@ -30,8 +39,14 @@ func NewPipeline(cozeAPI, cozeToken, nbAPI, nbToken string, limiter limiter.Rate
 		nbAPI:      nbAPI,
 		nbToken:    nbToken,
 		limiter:    limiter,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+		replySender: nil, // 可选，后续可以通过SetReplySender设置
 	}
+}
+
+// SetReplySender 设置回复发送器
+func (p *Pipeline) SetReplySender(sender ReplySender) {
+	p.replySender = sender
 }
 
 // ProcessEvent 处理事件
@@ -85,9 +100,15 @@ func (p *Pipeline) generateAIReply(evt *event.Event) (string, error) {
 		return "", fmt.Errorf("Coze API 限流")
 	}
 
+	// 从环境变量获取 Bot ID
+	botID := os.Getenv("COZE_BOT_ID")
+	if botID == "" {
+		return "", fmt.Errorf("COZE_BOT_ID 未配置，请在环境变量中设置")
+	}
+
 	// 构建请求
 	reqBody := map[string]interface{}{
-		"bot_id": "your_bot_id", // 从环境变量获取
+		"bot_id": botID,
 		"user":   evt.UserID,
 		"query":  evt.Content,
 		"stream": false,
@@ -137,10 +158,74 @@ func (p *Pipeline) generateAIReply(evt *event.Event) (string, error) {
 func (p *Pipeline) sendReply(evt *event.Event, reply string) {
 	fmt.Printf("📤 准备发送回复到 %s: %s\n", evt.Channel, reply)
 	
-	// 模拟发送回复逻辑
-	// 在实际场景中，这里应该调用抖音API发送评论回复
-	// 或通过WebSocket发送消息
-	fmt.Printf("✅ 已发送回复: 用户=%s, 内容=%s\n", evt.Nickname, reply)
+	// 根据事件类型和渠道发送回复
+	if evt.Channel == "douyin" {
+		// 抖音渠道：根据事件类型选择发送方式
+		if evt.Type == "video_comment" {
+			// 短视频评论回复
+			commentID, ok := evt.Metadata["comment_id"].(string)
+			if !ok || commentID == "" {
+				fmt.Printf("❌ 无法获取评论ID，跳过回复\n")
+				return
+			}
+			
+			videoID := evt.VideoID
+			if videoID == "" {
+				videoID = evt.RoomID // 兼容处理
+			}
+			
+			// 如果有回复发送器，使用它发送回复
+			if p.replySender != nil {
+				if err := p.replySender.SendVideoCommentReply(videoID, commentID, reply); err != nil {
+					fmt.Printf("❌ 发送视频评论回复失败: %v\n", err)
+					return
+				}
+				fmt.Printf("✅ 已发送回复: 用户=%s, 内容=%s\n", evt.Nickname, reply)
+			} else {
+				fmt.Printf("⚠️ 回复发送器未设置，仅记录日志: 评论ID=%s, 内容=%s\n", commentID, reply)
+			}
+		} else if evt.Type == "comment" {
+			// 直播间评论回复
+			commentID, ok := evt.Metadata["comment_id"].(string)
+			if !ok || commentID == "" {
+				fmt.Printf("❌ 无法获取评论ID，跳过回复\n")
+				return
+			}
+			
+			// 如果有回复发送器，使用它发送回复
+			if p.replySender != nil {
+				if err := p.replySender.SendLiveCommentReply(evt.RoomID, commentID, reply); err != nil {
+					fmt.Printf("❌ 发送直播间评论回复失败: %v\n", err)
+					return
+				}
+				fmt.Printf("✅ 已发送回复: 用户=%s, 内容=%s\n", evt.Nickname, reply)
+			} else {
+				fmt.Printf("⚠️ 回复发送器未设置，仅记录日志: 评论ID=%s, 内容=%s\n", commentID, reply)
+			}
+		} else if evt.Type == "private_message" {
+			// 私信回复
+			conversationID, ok1 := evt.Metadata["conversation_id"].(string)
+			userID := evt.UserID
+			if !ok1 || conversationID == "" {
+				fmt.Printf("❌ 无法获取会话ID，跳过回复\n")
+				return
+			}
+			
+			// 如果有回复发送器，使用它发送回复
+			if p.replySender != nil {
+				if err := p.replySender.SendPrivateMessage(conversationID, userID, reply); err != nil {
+					fmt.Printf("❌ 发送私信回复失败: %v\n", err)
+					return
+				}
+				fmt.Printf("✅ 已发送私信回复: 用户=%s, 内容=%s\n", evt.Nickname, reply)
+			} else {
+				fmt.Printf("⚠️ 回复发送器未设置，仅记录日志: 会话ID=%s, 内容=%s\n", conversationID, reply)
+			}
+		}
+	} else {
+		// 其他渠道的回复逻辑
+		fmt.Printf("✅ 已发送回复: 用户=%s, 内容=%s\n", evt.Nickname, reply)
+	}
 }
 
 // pushToCoze 推送到 Coze AI

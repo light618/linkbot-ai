@@ -146,9 +146,22 @@ func main() {
 	http.HandleFunc("/health", health.Handler)
 	http.HandleFunc("/ws", channelManager.WebSocketHandler)
 	
-	// OAuth授权路由
+	// OAuth授权路由 - 支持JSON和重定向两种方式
 	http.HandleFunc("/oauth/douyin", func(w http.ResponseWriter, r *http.Request) {
 		authURL := douyinOAuth.GetAuthURL()
+		
+		// 如果请求头包含 Accept: application/json，返回JSON格式
+		if r.Header.Get("Accept") == "application/json" || r.URL.Query().Get("format") == "json" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"auth_url": authURL,
+				"message": "获取授权URL成功",
+			})
+			return
+		}
+		
+		// 默认重定向到抖音授权页面
 		http.Redirect(w, r, authURL, http.StatusFound)
 	})
 	
@@ -320,6 +333,9 @@ func main() {
 			http.Error(w, "创建渠道失败: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		
+		// 将channel设置为pipeline的回复发送器
+		pipeline.SetReplySender(douyinChannel)
 		
 		// 启动渠道监听
 		err = douyinChannel.Start(roomID, token.AccessToken)

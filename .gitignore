@@ -1,0 +1,46 @@
+# 环境变量
+.env
+.env.local
+.env.*.local
+backend/.env
+backend/.env.local
+
+# 日志文件
+logs/
+*.log
+
+# 依赖
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+
+# 构建文件
+dist/
+build/
+backend/dist/
+frontend/build/
+
+# 系统文件
+.DS_Store
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# 临时文件
+*.pid
+*.tmp
+.cache/
+
+# 数据库
+*.db
+*.sqlite
+
+# 密钥文件
+*.pem
+*.key
+*.cert

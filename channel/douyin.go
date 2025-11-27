@@ -17,23 +17,25 @@ import (
 
 // DouyinChannel 抖音渠道
 type DouyinChannel struct {
-	pipeline   *pipeline.Pipeline
-	roomID     string
-	videoID    string
-	appID      string
-	appSecret  string
-	accessToken string
-	connected  bool
-	conn       *websocket.Conn
-	done       chan struct{}
+	pipeline     *pipeline.Pipeline
+	roomID       string
+	videoID      string
+	appID        string
+	appSecret    string
+	accessToken  string
+	connected    bool
+	conn         *websocket.Conn
+	done         chan struct{}
+	processedIDs map[string]bool // 记录已处理的评论ID，用于去重
 }
 
 // NewDouyinChannel 创建抖音渠道
 func NewDouyinChannel(pipeline *pipeline.Pipeline) (*DouyinChannel, error) {
 	return &DouyinChannel{
-		pipeline:  pipeline,
-		connected: false,
-		done:      make(chan struct{}),
+		pipeline:     pipeline,
+		connected:    false,
+		done:         make(chan struct{}),
+		processedIDs: make(map[string]bool),
 	}, nil
 }
 
@@ -46,7 +48,16 @@ func (d *DouyinChannel) Start(roomID, accessToken string) error {
 
 	log.Printf("🎵 抖音渠道启动，房间ID: %s", roomID)
 
-	// 尝试连接WebSocket
+	// 优先尝试API轮询方式（方案A）
+	if d.accessToken != "" {
+		log.Printf("🔄 使用API轮询方式监听直播间评论和私信")
+		go d.pollLiveComments()
+		go d.pollPrivateMessages() // 启动私信监听
+		d.connected = true
+		return nil
+	}
+
+	// 尝试连接WebSocket（备用方案）
 	if err := d.connectWebSocket(); err != nil {
 		log.Printf("❌ WebSocket连接失败，使用模拟模式: %v", err)
 		// 如果WebSocket连接失败，回退到模拟模式
@@ -206,20 +217,63 @@ func (d *DouyinChannel) SendMessage(content string) error {
 }
 
 // SendVideoCommentReply 发送短视频评论回复
-func (d *DouyinChannel) SendVideoCommentReply(commentID, content string) error {
-	if d.videoID == "" {
+func (d *DouyinChannel) SendVideoCommentReply(videoID, commentID, content string) error {
+	if videoID == "" {
 		return fmt.Errorf("未设置视频ID")
 	}
+	if commentID == "" {
+		return fmt.Errorf("未设置评论ID")
+	}
+	if d.accessToken == "" {
+		return fmt.Errorf("未设置access_token")
+	}
 
-	log.Printf("📤 抖音短视频回复: 评论ID=%s, 内容=%s", commentID, content)
+	log.Printf("📤 抖音短视频回复: 视频ID=%s, 评论ID=%s, 内容=%s", videoID, commentID, content)
 	
 	// 调用抖音官方API发送回复
-	_, err := d.callDouyinAPI("POST", "/api/v1/video/comment/reply", map[string]interface{}{
-		"video_id":   d.videoID,
+	// 注意：实际API路径可能需要根据抖音开放平台文档调整
+	_, err := d.callDouyinAPI("POST", "/video/comment/reply", map[string]interface{}{
+		"item_id":    videoID, // 抖音API使用item_id
 		"comment_id": commentID,
 		"content":    content,
 	})
-	return err
+	
+	if err != nil {
+		return fmt.Errorf("发送回复失败: %v", err)
+	}
+	
+	log.Printf("✅ 抖音短视频回复发送成功")
+	return nil
+}
+
+// SendLiveCommentReply 发送直播间评论回复
+func (d *DouyinChannel) SendLiveCommentReply(roomID, commentID, content string) error {
+	if roomID == "" {
+		return fmt.Errorf("未设置房间ID")
+	}
+	if commentID == "" {
+		return fmt.Errorf("未设置评论ID")
+	}
+	if d.accessToken == "" {
+		return fmt.Errorf("未设置access_token")
+	}
+
+	log.Printf("📤 抖音直播间回复: 房间ID=%s, 评论ID=%s, 内容=%s", roomID, commentID, content)
+	
+	// 调用抖音官方API发送回复
+	// 注意：实际API路径可能需要根据抖音开放平台文档调整
+	_, err := d.callDouyinAPI("POST", "/live/comment/reply", map[string]interface{}{
+		"room_id":    roomID,
+		"comment_id": commentID,
+		"content":    content,
+	})
+	
+	if err != nil {
+		return fmt.Errorf("发送回复失败: %v", err)
+	}
+	
+	log.Printf("✅ 抖音直播间回复发送成功")
+	return nil
 }
 
 // pollVideoComments 轮询短视频评论
@@ -227,13 +281,17 @@ func (d *DouyinChannel) pollVideoComments() {
 	ticker := time.NewTicker(10 * time.Second) // 每10秒轮询一次
 	defer ticker.Stop()
 
+	log.Printf("🔄 开始轮询短视频评论，视频ID: %s", d.videoID)
+
 	for {
 		select {
 		case <-d.done:
+			log.Printf("🛑 停止轮询短视频评论")
 			return
 		case <-ticker.C:
-			if d.videoID == "" {
-				return
+			if d.videoID == "" || d.accessToken == "" {
+				log.Printf("⚠️ 视频ID或access_token为空，跳过本次轮询")
+				continue
 			}
 
 			// 获取视频评论
@@ -243,17 +301,39 @@ func (d *DouyinChannel) pollVideoComments() {
 				continue
 			}
 
-			// 处理新评论
+			if len(comments) == 0 {
+				log.Printf("📭 暂无新评论")
+				continue
+			}
+
+			// 处理新评论（去重）
+			newCount := 0
 			for _, comment := range comments {
-				evt := event.NewEvent("video_comment", "douyin", d.videoID, comment.UserID, comment.Nickname)
+				// 检查是否已处理过
+				if d.processedIDs[comment.ID] {
+					continue
+				}
+
+				// 标记为已处理
+				d.processedIDs[comment.ID] = true
+				newCount++
+
+				// 创建事件
+				evt := event.NewEvent("video_comment", "douyin", "", comment.UserID, comment.Nickname)
+				evt.SetVideoID(d.videoID)
 				evt.SetContent(comment.Content)
 				evt.SetExtra("comment_id", comment.ID)
 
+				// 处理事件
 				if err := d.pipeline.ProcessEvent(evt); err != nil {
 					log.Printf("❌ 处理视频评论事件失败: %v", err)
+				} else {
+					log.Printf("📨 抖音视频评论: %s - %s", comment.Nickname, comment.Content)
 				}
+			}
 
-				log.Printf("📨 抖音视频评论: %s - %s", comment.Nickname, comment.Content)
+			if newCount > 0 {
+				log.Printf("✅ 本次轮询发现 %d 条新评论", newCount)
 			}
 		}
 	}
@@ -262,27 +342,177 @@ func (d *DouyinChannel) pollVideoComments() {
 // getVideoComments 获取视频评论
 func (d *DouyinChannel) getVideoComments() ([]VideoComment, error) {
 	// 调用抖音官方API获取评论
-	resp, err := d.callDouyinAPI("GET", "/api/v1/video/comment/list", map[string]interface{}{
-		"video_id": d.videoID,
-		"count":    20,
+	// 注意：实际API路径可能需要根据抖音开放平台文档调整
+	resp, err := d.callDouyinAPI("GET", "/video/comment/list", map[string]interface{}{
+		"item_id": d.videoID, // 抖音API使用item_id而不是video_id
+		"count":   20,
+		"cursor":  0, // 分页游标
 	})
 	
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("调用抖音API失败: %v", err)
 	}
 
-	// 解析响应
+	// 解析响应（根据抖音实际API响应格式调整）
 	var result struct {
-		Data struct {
-			Comments []VideoComment `json:"comments"`
+		ErrNo   int    `json:"err_no"`
+		ErrMsg  string `json:"err_msg"`
+		LogID   string `json:"log_id"`
+		Data    struct {
+			List []struct {
+				CommentID    string `json:"comment_id"`
+				UserID       string `json:"user_id"`
+				Nickname     string `json:"nickname"`
+				Avatar       string `json:"avatar"`
+				CommentText  string `json:"comment_text"`
+				CreateTime   int64  `json:"create_time"`
+			} `json:"list"`
+			Cursor int64 `json:"cursor"`
+			HasMore bool `json:"has_more"`
 		} `json:"data"`
 	}
 	
 	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("解析API响应失败: %v", err)
 	}
 
-	return result.Data.Comments, nil
+	// 检查API错误
+	if result.ErrNo != 0 {
+		return nil, fmt.Errorf("抖音API错误: %d - %s", result.ErrNo, result.ErrMsg)
+	}
+
+	// 转换为VideoComment格式
+	comments := make([]VideoComment, 0, len(result.Data.List))
+	for _, item := range result.Data.List {
+		comments = append(comments, VideoComment{
+			ID:       item.CommentID,
+			UserID:   item.UserID,
+			Nickname: item.Nickname,
+			Content:  item.CommentText,
+			Time:     item.CreateTime,
+		})
+	}
+
+	return comments, nil
+}
+
+// pollLiveComments 轮询直播间评论
+func (d *DouyinChannel) pollLiveComments() {
+	ticker := time.NewTicker(5 * time.Second) // 每5秒轮询一次（直播间评论更频繁）
+	defer ticker.Stop()
+
+	log.Printf("🔄 开始轮询直播间评论，房间ID: %s", d.roomID)
+
+	for {
+		select {
+		case <-d.done:
+			log.Printf("🛑 停止轮询直播间评论")
+			return
+		case <-ticker.C:
+			if d.roomID == "" || d.accessToken == "" {
+				log.Printf("⚠️ 房间ID或access_token为空，跳过本次轮询")
+				continue
+			}
+
+			// 获取直播间评论
+			comments, err := d.getLiveComments()
+			if err != nil {
+				log.Printf("❌ 获取直播间评论失败: %v", err)
+				continue
+			}
+
+			if len(comments) == 0 {
+				continue
+			}
+
+			// 处理新评论（去重）
+			newCount := 0
+			for _, comment := range comments {
+				// 检查是否已处理过
+				commentKey := fmt.Sprintf("live_%s_%s", d.roomID, comment.ID)
+				if d.processedIDs[commentKey] {
+					continue
+				}
+
+				// 标记为已处理
+				d.processedIDs[commentKey] = true
+				newCount++
+
+				// 创建事件
+				evt := event.NewEvent("comment", "douyin", d.roomID, comment.UserID, comment.Nickname)
+				evt.SetContent(comment.Content)
+				evt.SetExtra("comment_id", comment.ID)
+
+				// 处理事件
+				if err := d.pipeline.ProcessEvent(evt); err != nil {
+					log.Printf("❌ 处理直播间评论事件失败: %v", err)
+				} else {
+					log.Printf("📨 抖音直播间评论: %s - %s", comment.Nickname, comment.Content)
+				}
+			}
+
+			if newCount > 0 {
+				log.Printf("✅ 本次轮询发现 %d 条新评论", newCount)
+			}
+		}
+	}
+}
+
+// getLiveComments 获取直播间评论
+func (d *DouyinChannel) getLiveComments() ([]VideoComment, error) {
+	// 调用抖音官方API获取直播间评论
+	// 注意：实际API路径可能需要根据抖音开放平台文档调整
+	resp, err := d.callDouyinAPI("GET", "/live/comment/list", map[string]interface{}{
+		"room_id": d.roomID,
+		"count":   50, // 直播间评论更多，获取更多条
+		"cursor":  0,
+	})
+	
+	if err != nil {
+		return nil, fmt.Errorf("调用抖音API失败: %v", err)
+	}
+
+	// 解析响应（根据抖音实际API响应格式调整）
+	var result struct {
+		ErrNo   int    `json:"err_no"`
+		ErrMsg  string `json:"err_msg"`
+		LogID   string `json:"log_id"`
+		Data    struct {
+			List []struct {
+				CommentID    string `json:"comment_id"`
+				UserID       string `json:"user_id"`
+				Nickname     string `json:"nickname"`
+				Avatar       string `json:"avatar"`
+				CommentText  string `json:"comment_text"`
+				CreateTime   int64  `json:"create_time"`
+			} `json:"list"`
+			Cursor int64 `json:"cursor"`
+			HasMore bool `json:"has_more"`
+		} `json:"data"`
+	}
+	
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("解析API响应失败: %v", err)
+	}
+
+	// 检查API错误
+	if result.ErrNo != 0 {
+		return nil, fmt.Errorf("抖音API错误: %d - %s", result.ErrNo, result.ErrMsg)
+	}
+
+	// 转换为VideoComment格式（直播间和短视频使用相同结构）
+	comments := make([]VideoComment, 0, len(result.Data.List))
+	for _, item := range result.Data.List {
+		comments = append(comments, VideoComment{
+			ID:       item.CommentID,
+			UserID:   item.UserID,
+			Nickname: item.Nickname,
+			Content:  item.CommentText,
+			Time:     item.CreateTime,
+		})
+	}
+
+	return comments, nil
 }
 
 // callDouyinAPI 调用抖音API
@@ -362,6 +592,167 @@ func (d *DouyinChannel) GetStatus() string {
 		return "online"
 	}
 	return "offline"
+}
+
+// pollPrivateMessages 轮询私信消息
+func (d *DouyinChannel) pollPrivateMessages() {
+	ticker := time.NewTicker(10 * time.Second) // 每10秒轮询一次私信
+	defer ticker.Stop()
+
+	log.Printf("🔄 开始轮询私信消息")
+
+	for {
+		select {
+		case <-d.done:
+			log.Printf("🛑 停止轮询私信消息")
+			return
+		case <-ticker.C:
+			if d.accessToken == "" {
+				log.Printf("⚠️ access_token为空，跳过本次私信轮询")
+				continue
+			}
+
+			// 获取私信消息
+			messages, err := d.getPrivateMessages()
+			if err != nil {
+				log.Printf("❌ 获取私信消息失败: %v", err)
+				continue
+			}
+
+			if len(messages) == 0 {
+				continue
+			}
+
+			// 处理新私信（去重）
+			newCount := 0
+			for _, msg := range messages {
+				// 检查是否已处理过
+				msgKey := fmt.Sprintf("pm_%s_%s", msg.UserID, msg.ID)
+				if d.processedIDs[msgKey] {
+					continue
+				}
+
+				// 标记为已处理
+				d.processedIDs[msgKey] = true
+				newCount++
+
+				// 创建事件
+				evt := event.NewEvent("private_message", "douyin", "", msg.UserID, msg.Nickname)
+				evt.SetContent(msg.Content)
+				evt.SetExtra("message_id", msg.ID)
+				evt.SetExtra("conversation_id", msg.ConversationID)
+
+				// 处理事件
+				if err := d.pipeline.ProcessEvent(evt); err != nil {
+					log.Printf("❌ 处理私信事件失败: %v", err)
+				} else {
+					log.Printf("📨 抖音私信: %s - %s", msg.Nickname, msg.Content)
+				}
+			}
+
+			if newCount > 0 {
+				log.Printf("✅ 本次轮询发现 %d 条新私信", newCount)
+			}
+		}
+	}
+}
+
+// PrivateMessage 私信消息结构
+type PrivateMessage struct {
+	ID             string `json:"id"`
+	ConversationID string `json:"conversation_id"`
+	UserID         string `json:"user_id"`
+	Nickname       string `json:"nickname"`
+	Content        string `json:"content"`
+	Time           int64  `json:"time"`
+	Type           string `json:"type"` // text, image, video等
+}
+
+// getPrivateMessages 获取私信消息
+func (d *DouyinChannel) getPrivateMessages() ([]PrivateMessage, error) {
+	// 调用抖音官方API获取私信消息
+	// 注意：实际API路径可能需要根据抖音开放平台文档调整
+	resp, err := d.callDouyinAPI("GET", "/im/message/list", map[string]interface{}{
+		"count": 20,
+		"cursor": 0,
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("调用抖音API失败: %v", err)
+	}
+
+	// 解析响应（根据抖音实际API响应格式调整）
+	var result struct {
+		ErrNo  int    `json:"err_no"`
+		ErrMsg string `json:"err_msg"`
+		LogID  string `json:"log_id"`
+		Data   struct {
+			List []struct {
+				MessageID      string `json:"message_id"`
+				ConversationID string `json:"conversation_id"`
+				UserID         string `json:"user_id"`
+				Nickname       string `json:"nickname"`
+				Avatar         string `json:"avatar"`
+				Content        string `json:"content"`
+				MessageType    string `json:"message_type"`
+				CreateTime     int64  `json:"create_time"`
+			} `json:"list"`
+			Cursor  int64 `json:"cursor"`
+			HasMore bool `json:"has_more"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("解析API响应失败: %v", err)
+	}
+
+	// 检查API错误
+	if result.ErrNo != 0 {
+		return nil, fmt.Errorf("抖音API错误: %d - %s", result.ErrNo, result.ErrMsg)
+	}
+
+	// 转换为内部结构
+	messages := make([]PrivateMessage, 0, len(result.Data.List))
+	for _, item := range result.Data.List {
+		messages = append(messages, PrivateMessage{
+			ID:             item.MessageID,
+			ConversationID: item.ConversationID,
+			UserID:         item.UserID,
+			Nickname:       item.Nickname,
+			Content:        item.Content,
+			Time:           item.CreateTime,
+			Type:           item.MessageType,
+		})
+	}
+
+	return messages, nil
+}
+
+// SendPrivateMessage 发送私信回复
+func (d *DouyinChannel) SendPrivateMessage(conversationID, userID, content string) error {
+	if conversationID == "" {
+		return fmt.Errorf("未设置会话ID")
+	}
+	if d.accessToken == "" {
+		return fmt.Errorf("未设置access_token")
+	}
+
+	log.Printf("📤 抖音私信回复: 会话ID=%s, 用户ID=%s, 内容=%s", conversationID, userID, content)
+
+	// 调用抖音官方API发送私信
+	_, err := d.callDouyinAPI("POST", "/im/message/send", map[string]interface{}{
+		"conversation_id": conversationID,
+		"to_user_id":      userID,
+		"content":         content,
+		"message_type":    "text",
+	})
+
+	if err != nil {
+		return fmt.Errorf("发送私信失败: %v", err)
+	}
+
+	log.Printf("✅ 抖音私信回复发送成功")
+	return nil
 }
 
 // simulateEvents 模拟事件（实际项目中应该连接真实的 WebSocket）

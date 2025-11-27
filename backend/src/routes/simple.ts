@@ -68,6 +68,197 @@ router.post('/auth/login', (req, res) => {
   }
 });
 
+// 抖音OAuth授权 - 获取授权URL
+router.get('/channels/douyin/oauth/url', async (req, res) => {
+  try {
+    // 调用Go服务的OAuth接口，请求JSON格式
+    const proxyUrl = process.env.PROXY_URL || 'http://localhost:8080';
+    const response = await fetch(`${proxyUrl}/oauth/douyin?format=json`, {
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      throw new Error('获取授权URL失败');
+    }
+    
+    const data: any = await response.json();
+    res.json({
+      success: true,
+      message: '获取授权URL成功',
+      data: {
+        authUrl: data.auth_url || data.url,
+      },
+    });
+  } catch (error: any) {
+    console.error('获取抖音授权URL错误:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || '获取授权URL失败',
+    });
+  }
+});
+
+// 抖音OAuth回调处理
+router.get('/channels/douyin/oauth/callback', async (req, res) => {
+  try {
+    const { code, state } = req.query;
+    
+    if (!code) {
+      return res.status(400).json({
+        success: false,
+        message: '授权码不存在',
+      });
+    }
+    
+    // 调用Go服务处理OAuth回调
+    const proxyUrl = process.env.PROXY_URL || 'http://localhost:8080';
+    const response = await fetch(`${proxyUrl}/oauth/callback?code=${code}&state=${state}`);
+    
+    if (!response.ok) {
+      throw new Error('处理OAuth回调失败');
+    }
+    
+    const data: any = await response.json();
+    
+    // 返回授权成功信息
+    return res.json({
+      success: true,
+      message: '抖音授权成功',
+      data: {
+        accessToken: data.access_token,
+        userInfo: data.user_info,
+        accountId: data.user_info?.open_id,
+        accountName: data.user_info?.nickname,
+      },
+    });
+  } catch (error: any) {
+    console.error('抖音OAuth回调错误:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || '处理授权回调失败',
+    });
+  }
+});
+
+// 启动抖音渠道监听
+router.post('/channels/douyin/start', async (req, res) => {
+  try {
+    const { accountId, accessToken, roomId, videoId } = req.body;
+    
+    if (!accessToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'accessToken不能为空',
+      });
+    }
+    
+    // 调用Go服务启动渠道
+    const proxyUrl = process.env.PROXY_URL || 'http://localhost:8080';
+    const response = await fetch(`${proxyUrl}/api/channel/douyin/start`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        account_id: accountId,
+        access_token: accessToken,
+        room_id: roomId,
+        video_id: videoId,
+      }),
+    });
+    
+    if (!response.ok) {
+      throw new Error('启动渠道失败');
+    }
+    
+    const data: any = await response.json();
+    
+    return res.json({
+      success: true,
+      message: '启动抖音渠道成功',
+      data: {
+        channelId: data.channel_id,
+        status: 'connected',
+      },
+    });
+  } catch (error: any) {
+    console.error('启动抖音渠道错误:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || '启动渠道失败',
+    });
+  }
+});
+
+// 停止抖音渠道监听
+router.post('/channels/douyin/stop', async (req, res) => {
+  try {
+    const { accountId } = req.body;
+    
+    // 调用Go服务停止渠道
+    const proxyUrl = process.env.PROXY_URL || 'http://localhost:8080';
+    const response = await fetch(`${proxyUrl}/api/channel/douyin/stop`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        account_id: accountId,
+      }),
+    });
+    
+    if (!response.ok) {
+      throw new Error('停止渠道失败');
+    }
+    
+    res.json({
+      success: true,
+      message: '停止抖音渠道成功',
+    });
+  } catch (error: any) {
+    console.error('停止抖音渠道错误:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || '停止渠道失败',
+    });
+  }
+});
+
+// 获取抖音渠道状态
+router.get('/channels/douyin/status/:accountId', async (req, res) => {
+  try {
+    const { accountId } = req.params;
+    
+    // 调用Go服务获取状态
+    const proxyUrl = process.env.PROXY_URL || 'http://localhost:8080';
+    const response = await fetch(`${proxyUrl}/api/status?account_id=${accountId}`);
+    
+    if (!response.ok) {
+      throw new Error('获取渠道状态失败');
+    }
+    
+    const data: any = await response.json();
+    
+    res.json({
+      success: true,
+      message: '获取渠道状态成功',
+      data: {
+        status: data.status || 'disconnected',
+        connected: data.connected || false,
+        lastMessage: data.last_message,
+      },
+    });
+  } catch (error: any) {
+    console.error('获取抖音渠道状态错误:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || '获取渠道状态失败',
+    });
+  }
+});
+
 // 简化的仪表盘数据
 router.get('/analytics/dashboard', (req, res) => {
   res.json({

@@ -27,7 +27,20 @@ app.use(compression());
 // 日志中间件
 app.use(morgan('combined'));
 
-// 限流中间件
+// 限流中间件 - 为登录接口设置更宽松的限制
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 分钟
+  max: 20, // 登录接口：15分钟内最多20次尝试
+  message: {
+    success: false,
+    message: '登录尝试过于频繁，请稍后再试',
+  },
+  skipSuccessfulRequests: true, // 成功请求不计入限制
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// 通用限流中间件 - 排除登录和注册接口
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000'), // 15 分钟
   max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100'), // 限制每个 IP 100 次请求
@@ -35,7 +48,19 @@ const limiter = rateLimit({
     success: false,
     message: '请求过于频繁，请稍后再试',
   },
+  skip: (req) => {
+    // 跳过登录和注册接口，它们使用专门的限流
+    return req.path === '/auth/login' || req.path === '/auth/register';
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
+
+// 登录和注册接口使用更宽松的限流（在路由之前应用）
+app.use('/api/auth/login', loginLimiter);
+app.use('/api/auth/register', loginLimiter);
+
+// 其他API使用通用限流
 app.use('/api', limiter);
 
 // 解析 JSON

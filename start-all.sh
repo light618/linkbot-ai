@@ -58,17 +58,8 @@ npm start > /tmp/frontend.log 2>&1 &
 FRONTEND_PID=$!
 echo "✅ 前端已启动 (PID: $FRONTEND_PID)"
 
-# 启动ngrok (端口4040)
-echo "🌐 启动ngrok服务 (4040)..."
-cd /Users/yiche/linkbot-ai/proxy
-pkill ngrok 2>/dev/null
-sleep 2
-nohup ngrok http 8080 > /tmp/ngrok.log 2>&1 &
-NGROK_PID=$!
-echo "✅ ngrok已启动 (PID: $NGROK_PID)"
-
-# 等待ngrok启动
-sleep 5
+# ngrok已移除，不再使用
+echo "ℹ️  ngrok已移除，使用本地服务"
 
 # 检查服务状态
 echo ""
@@ -90,13 +81,7 @@ else
     echo "❌ Go代理: 未响应，查看日志: tail -f /tmp/proxy.log"
 fi
 
-# 检查ngrok
-if curl -s http://localhost:4040/api/tunnels > /dev/null 2>&1; then
-    NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | python3 -c "import sys, json; data=json.load(sys.stdin); print([t['public_url'] for t in data.get('tunnels',[])][0] if data.get('tunnels') else 'URL获取中...')")
-    echo "✅ ngrok: $NGROK_URL (运行中)"
-else
-    echo "⏳ ngrok: 仍在启动中"
-fi
+# ngrok已移除
 
 echo ""
 echo "=========================="
@@ -107,7 +92,6 @@ echo "登录账号: admin / admin123"
 echo ""
 echo "后端API: http://localhost:3001"
 echo "Go代理: http://localhost:8080"
-echo "ngrok: $NGROK_URL"
 echo ""
 echo "=========================="
 echo "📝 查看日志"
@@ -115,7 +99,6 @@ echo "=========================="
 echo "后端: tail -f /tmp/backend.log"
 echo "Go代理: tail -f /tmp/proxy.log"
 echo "前端: tail -f /tmp/frontend.log"
-echo "ngrok: tail -f /tmp/ngrok.log"
 echo ""
 echo "⚠️  提示: 按 Ctrl+C 不会停止服务"
 echo "   停止服务请使用: bash stop-all.sh"
@@ -125,7 +108,6 @@ echo ""
 echo "BACKEND_PID=$BACKEND_PID" > /tmp/linkbot-pids.txt
 echo "PROXY_PID=$PROXY_PID" >> /tmp/linkbot-pids.txt
 echo "FRONTEND_PID=$FRONTEND_PID" >> /tmp/linkbot-pids.txt
-echo "NGROK_PID=$NGROK_PID" >> /tmp/linkbot-pids.txt
 
 echo "✅ 所有服务启动完成！"
 
